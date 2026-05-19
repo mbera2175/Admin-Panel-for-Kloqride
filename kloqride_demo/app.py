@@ -743,12 +743,11 @@ def show_sidebar():
     """, unsafe_allow_html=True)
 
     if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
-        # Confirmation dialog for logout
         st.session_state.logged_in = False
         st.session_state.user = None
         st.session_state.user_email = None
         st.session_state.login_time = None
-        st.success("✅ Logged out successfully!")
+        st.query_params.clear()  # ← clear URL param so auto-login doesn't re-trigger
         st.rerun()
 
     return page
