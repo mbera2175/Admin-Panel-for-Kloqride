@@ -730,14 +730,14 @@ def show_sidebar():
     /* Use a hidden span to securely target ONLY the next button element */
     div[data-testid="stSidebarNav"] ~ div.element-container:has(#logout-target) + div.element-container button,
     div.element-container:has(#logout-target) + div.element-container button {
-        background-color: #dc3545 !important;
+        background-color: #FF6B00 !important;
         color: white !important;
-        border: 1px solid #dc3545 !important;
+        border: 1px solid #FF6B00 !important;
     }
     div[data-testid="stSidebarNav"] ~ div.element-container:has(#logout-target) + div.element-container button:hover,
     div.element-container:has(#logout-target) + div.element-container button:hover {
-        background-color: #c82333 !important;
-        border-color: #bd2130 !important;
+        background-color: #CC4E00 !important;
+        border-color: #CC4E00 !important;
     }
     </style>
     <div id="logout-target" style="display:none;"></div>
