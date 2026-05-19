@@ -235,9 +235,9 @@ section[data-testid="stSidebar"] button:hover {
     background-color: #E8E8E8;
 }
 
-/* 🔥 ACTIVE (selected) button */
+/* 🔥 ACTIVE (selected) nav button */
 section[data-testid="stSidebar"] button[kind="primary"] {
-    background-color: #E85F00 !important;  /* Olive Green */
+    background-color: #FF6B00 !important;
     color: white !important;
     font-weight: 500;
 }
@@ -727,15 +727,13 @@ def show_sidebar():
 
     st.sidebar.markdown("""
     <style>
-    /* Target logout button by its unique key */
-    div[data-testid="stSidebar"] div[data-testid="stButton"][key="logout_btn"] button,
-    section[data-testid="stSidebar"] div.stButton:last-of-type button {
+    /* Logout button — always orange */
+    section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"][kind="secondary"]:last-of-type {
         background-color: #FF6B00 !important;
         color: white !important;
         border: 1px solid #FF6B00 !important;
     }
-    div[data-testid="stSidebar"] div[data-testid="stButton"][key="logout_btn"] button:hover,
-    section[data-testid="stSidebar"] div.stButton:last-of-type button:hover {
+    section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"][kind="secondary"]:last-of-type:hover {
         background-color: #CC4E00 !important;
         border-color: #CC4E00 !important;
     }
