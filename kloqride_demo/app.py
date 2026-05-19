@@ -727,23 +727,22 @@ def show_sidebar():
 
     st.sidebar.markdown("""
     <style>
-    /* Use a hidden span to securely target ONLY the next button element */
-    div[data-testid="stSidebarNav"] ~ div.element-container:has(#logout-target) + div.element-container button,
-    div.element-container:has(#logout-target) + div.element-container button {
+    /* Target logout button by its unique key */
+    div[data-testid="stSidebar"] div[data-testid="stButton"][key="logout_btn"] button,
+    section[data-testid="stSidebar"] div.stButton:last-of-type button {
         background-color: #FF6B00 !important;
         color: white !important;
         border: 1px solid #FF6B00 !important;
     }
-    div[data-testid="stSidebarNav"] ~ div.element-container:has(#logout-target) + div.element-container button:hover,
-    div.element-container:has(#logout-target) + div.element-container button:hover {
+    div[data-testid="stSidebar"] div[data-testid="stButton"][key="logout_btn"] button:hover,
+    section[data-testid="stSidebar"] div.stButton:last-of-type button:hover {
         background-color: #CC4E00 !important;
         border-color: #CC4E00 !important;
     }
     </style>
-    <div id="logout-target" style="display:none;"></div>
     """, unsafe_allow_html=True)
 
-    if st.sidebar.button("Logout", use_container_width=True):
+    if st.sidebar.button("Logout", use_container_width=True, key="logout_btn"):
         # Confirmation dialog for logout
         st.session_state.logged_in = False
         st.session_state.user = None
