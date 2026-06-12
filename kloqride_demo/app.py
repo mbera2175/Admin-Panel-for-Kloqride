@@ -17,18 +17,18 @@ import requests
 load_dotenv()
 
 # ── Backend API ───────────────────────────────────────────────────────────────
-API_BASE           = os.getenv("API_BASE",            "https://kridebackend-production.up.railway.app")
-ADMIN_PHONE        = os.getenv("ADMIN_PHONE",         "0000000000")
-ADMIN_PASSWORD_API = os.getenv("ADMIN_PASSWORD_API",  "secret")
+API_BASE              = os.getenv("API_BASE", "http://13.232.171.208:8000")
+ADMIN_EMAIL_API       = os.getenv("ADMIN_EMAIL_API", "")
+ADMIN_PASSWORD_API    = os.getenv("ADMIN_PASSWORD_API", "")
 
 def get_admin_token():
     try:
         res = requests.post(
-            f"{API_BASE}/auth/password/login",
-            json={"phone": ADMIN_PHONE, "password": ADMIN_PASSWORD_API, "role": "rider"},
+            f"{API_BASE}/auth/admin/login",
+            json={"email": ADMIN_EMAIL_API, "password": ADMIN_PASSWORD_API},
             timeout=10)
         if res.status_code == 200:
-            return res.json().get("access_token", "")
+            return res.json().get("token", "")
     except Exception:
         return ""
     return ""
@@ -36,13 +36,14 @@ def get_admin_token():
 if "admin_token" not in st.session_state or not st.session_state.admin_token:
     st.session_state.admin_token = get_admin_token()
 
-ADMIN_TOKEN = st.session_state.admin_token
+def _auth_headers():
+    token = st.session_state.get("admin_token", "")
+    return {"Authorization": f"Bearer {token}"}
 
 def api_get(endpoint, params=None):
-    token = st.session_state.get("admin_token", ADMIN_TOKEN)
     try:
         res = requests.get(f"{API_BASE}{endpoint}", params=params,
-                           headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                           headers=_auth_headers(), timeout=10)
         if res.status_code == 200:
             return res.json()
         return None
@@ -53,7 +54,7 @@ def api_get(endpoint, params=None):
 def api_post(endpoint, data=None):
     try:
         res = requests.post(f"{API_BASE}{endpoint}", json=data,
-                            headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}, timeout=10)
+                            headers=_auth_headers(), timeout=10)
         return res.json()
     except Exception as e:
         st.error(f"API Error: {e}")
@@ -62,7 +63,7 @@ def api_post(endpoint, data=None):
 def api_patch(endpoint, data=None):
     try:
         res = requests.patch(f"{API_BASE}{endpoint}", json=data,
-                             headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}, timeout=10)
+                             headers=_auth_headers(), timeout=10)
         return res.json()
     except Exception as e:
         st.error(f"API Error: {e}")
@@ -71,7 +72,7 @@ def api_patch(endpoint, data=None):
 def api_delete(endpoint):
     try:
         res = requests.delete(f"{API_BASE}{endpoint}",
-                              headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}, timeout=10)
+                              headers=_auth_headers(), timeout=10)
         return res.json()
     except Exception as e:
         st.error(f"API Error: {e}")
