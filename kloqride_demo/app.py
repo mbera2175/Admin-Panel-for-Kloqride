@@ -981,19 +981,147 @@ def page_driver_online_log():
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 def page_pricing_config():
-    page_title("⚙️ Pricing & Fees")
+    page_title("⚙️ Pricing & Fees", "Edit fares, commission, and surge — changes apply in real time")
     data = api_get("/pricing/")
     if not data:
         st.error("❌ Could not load pricing.")
         return
-    pricing = data.get("pricing",[])
-    surge   = data.get("surge",{})
-    c1,c2 = st.columns(2)
-    with c1: st.markdown(metric("Commission %", f"{surge.get('commission_pct',10)}%","","purple"), unsafe_allow_html=True)
-    with c2: st.markdown(metric("Surge Active", "🔴 ON" if surge.get("manual_surge_active") else "⚫ OFF","","amber"), unsafe_allow_html=True)
+
+    pricing = data.get("pricing", [])
+    surge   = data.get("surge", {})
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown(metric("Active Surge Multiplier", f"{surge.get('active_multiplier', 1.0)}x", "", "purple"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(metric("Manual Surge", "🔴 ON" if surge.get("manual_surge_active") else "⚫ OFF", "", "amber"), unsafe_allow_html=True)
+    with c3:
+        st.markdown(metric("Scheduled Surge", "🔴 ON" if surge.get("schedule_surge_active") else "⚫ OFF", "", "amber"), unsafe_allow_html=True)
+
     st.markdown("---")
-    if pricing:
-        st.dataframe(pd.DataFrame(pricing), use_container_width=True, hide_index=True)
+    tab1, tab2 = st.tabs(["💰 Edit Fares & Commission", "⚡ Surge Control"])
+
+    # ── TAB 1: Edit Fares ──────────────────────────────────────────────────
+    with tab1:
+        if not pricing:
+            st.warning("No pricing data found.")
+        else:
+            cities = sorted(set(p["city"] for p in pricing))
+            sel_city = st.selectbox("City", cities, key="pricing_city")
+
+            city_rows = [p for p in pricing if p["city"] == sel_city]
+            vehicles = sorted(set(p["vehicle_type"] for p in city_rows))
+            sel_vehicle = st.selectbox("Vehicle Type", vehicles, key="pricing_vehicle")
+
+            v_rows = [p for p in city_rows if p["vehicle_type"] == sel_vehicle]
+            services = sorted(set(p["service_type"] for p in v_rows))
+            sel_service = st.selectbox("Service Type", services, key="pricing_service")
+
+            cfg = next((p for p in v_rows if p["service_type"] == sel_service), None)
+
+            if cfg:
+                st.markdown(f"**Editing: {sel_vehicle} · {sel_service} · {sel_city}**")
+                with st.form("edit_pricing_form"):
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        base_fare   = st.number_input("Base Fare (₹)", min_value=0.0, value=float(cfg["base_fare"]), step=1.0)
+                        per_km_fare = st.number_input("Per KM Fare (₹)", min_value=0.0, value=float(cfg["per_km_fare"]), step=0.5)
+                        per_min_fare= st.number_input("Per Minute Fare (₹)", min_value=0.0, value=float(cfg["per_min_fare"]), step=0.1)
+                    with fc2:
+                        min_fare    = st.number_input("Minimum Fare (₹)", min_value=0.0, value=float(cfg["min_fare"]), step=1.0)
+                        commission_type = st.selectbox("Commission Type", ["percent", "flat"],
+                                                        index=0 if cfg.get("commission_type","percent")=="percent" else 1)
+                        commission_value = st.number_input("Commission Value", min_value=0.0,
+                                                             value=float(cfg.get("commission_value",10)), step=0.5)
+
+                    submitted = st.form_submit_button("💾 Save Changes", type="primary", use_container_width=True)
+                    if submitted:
+                        result = api_patch("/pricing/vehicle", {
+                            "city": sel_city,
+                            "vehicle_type": sel_vehicle,
+                            "service_type": sel_service,
+                            "base_fare": base_fare,
+                            "per_km_fare": per_km_fare,
+                            "per_min_fare": per_min_fare,
+                            "min_fare": min_fare,
+                            "commission_type": commission_type,
+                            "commission_value": commission_value,
+                        })
+                        if result and "message" in result:
+                            st.success(result["message"])
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Failed to update: {result}")
+
+            st.markdown("---")
+            st.markdown("##### All Pricing Configs")
+            st.dataframe(pd.DataFrame(pricing), use_container_width=True, hide_index=True)
+
+    # ── TAB 2: Surge Control ─────────────────────────────────────────────────
+    with tab2:
+        st.markdown("##### Manual Surge")
+        with st.form("manual_surge_form"):
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                manual_active = st.checkbox("Enable Manual Surge", value=surge.get("manual_surge_active", False))
+            with mc2:
+                manual_mult = st.number_input("Manual Surge Multiplier", min_value=1.0, max_value=5.0, step=0.1,
+                                               value=float(surge.get("manual_surge_multiplier", 1.0)))
+            if st.form_submit_button("💾 Save Manual Surge", type="primary"):
+                result = api_patch("/pricing/surge", {
+                    "manual_surge_active": manual_active,
+                    "manual_surge_multiplier": manual_mult,
+                })
+                if result:
+                    st.success(result.get("message", "Updated ✅"))
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### Scheduled Surge (e.g. peak hours)")
+        with st.form("schedule_surge_form"):
+            sc1, sc2, sc3 = st.columns(3)
+            with sc1:
+                sched_active = st.checkbox("Enable Scheduled Surge", value=surge.get("schedule_surge_active", False))
+            with sc2:
+                sched_start = st.number_input("Start Hour (0-23)", min_value=0, max_value=23,
+                                               value=int(surge.get("schedule_start_hour", 8)))
+            with sc3:
+                sched_end = st.number_input("End Hour (0-23)", min_value=0, max_value=23,
+                                             value=int(surge.get("schedule_end_hour", 10)))
+            sched_mult = st.number_input("Scheduled Surge Multiplier", min_value=1.0, max_value=5.0, step=0.1,
+                                          value=float(surge.get("schedule_surge_multiplier", 1.0)))
+            if st.form_submit_button("💾 Save Scheduled Surge", type="primary"):
+                result = api_patch("/pricing/surge", {
+                    "schedule_surge_active": sched_active,
+                    "schedule_start_hour": sched_start,
+                    "schedule_end_hour": sched_end,
+                    "schedule_surge_multiplier": sched_mult,
+                })
+                if result:
+                    st.success(result.get("message", "Updated ✅"))
+                    st.rerun()
+
+        st.markdown("---")
+        st.markdown("##### Auto Surge (based on demand)")
+        with st.form("auto_surge_form"):
+            ac1, ac2, ac3 = st.columns(3)
+            with ac1:
+                auto_active = st.checkbox("Enable Auto Surge", value=surge.get("auto_surge_active", False))
+            with ac2:
+                auto_threshold = st.number_input("Demand Threshold (pending rides)", min_value=1,
+                                                  value=int(surge.get("auto_surge_threshold", 10)))
+            with ac3:
+                auto_mult = st.number_input("Auto Surge Multiplier", min_value=1.0, max_value=5.0, step=0.1,
+                                             value=float(surge.get("auto_surge_multiplier", 1.0)))
+            if st.form_submit_button("💾 Save Auto Surge", type="primary"):
+                result = api_patch("/pricing/surge", {
+                    "auto_surge_active": auto_active,
+                    "auto_surge_threshold": auto_threshold,
+                    "auto_surge_multiplier": auto_mult,
+                })
+                if result:
+                    st.success(result.get("message", "Updated ✅"))
+                    st.rerun()
 
 def page_promotions():
     page_title("🎁 Promotions")
