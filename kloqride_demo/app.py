@@ -1124,27 +1124,103 @@ def page_pricing_config():
                     st.rerun()
 
 def page_promotions():
-    page_title("🎁 Promotions")
-    st.info("Promotions are managed locally. Use Activate Promo to create new ones.")
+    page_title("🎁 Promotions", "All promo codes — toggle active/inactive or delete")
+    data = api_get("/promos/")
+    if not data:
+        st.error("❌ Could not load promos.")
+        return
+    promos = data.get("promos", [])
+    if not promos:
+        st.info("No promo codes yet. Create one in 'Activate Promo'.")
+        return
+
+    for p in promos:
+        with st.container(border=True):
+            c1, c2, c3, c4, c5 = st.columns([2, 2, 2, 2, 2])
+            with c1:
+                st.markdown(f"**{p['code']}**")
+                st.caption(p.get("description", ""))
+            with c2:
+                st.markdown(f"💰 {p['discount_display']}")
+                st.caption("Auto-apply ✅" if p["is_auto_apply"] else "Manual")
+            with c3:
+                st.caption(f"Min fare: ₹{p.get('min_fare', 0)}")
+                st.caption(f"Vehicle: {p.get('vehicle_type') or 'All'}")
+            with c4:
+                used = p.get("used_count", 0)
+                max_u = p.get("max_uses", 0)
+                st.caption(f"Used: {used} / {'∞' if max_u==0 else max_u}")
+                st.caption(f"Expiry: {p.get('expiry_date') or 'Never'}")
+            with c5:
+                status = "🟢 Active" if p["is_active"] else "🔴 Inactive"
+                st.markdown(status)
+                bcol1, bcol2 = st.columns(2)
+                with bcol1:
+                    if st.button("Toggle", key=f"toggle_{p['id']}", use_container_width=True):
+                        result = api_patch(f"/promos/{p['id']}/toggle")
+                        if result:
+                            st.success(result.get("message", "Updated"))
+                            st.rerun()
+                with bcol2:
+                    if st.button("Delete", key=f"delete_{p['id']}", use_container_width=True):
+                        result = api_delete(f"/promos/{p['id']}")
+                        if result:
+                            st.success(result.get("message", "Deleted"))
+                            st.rerun()
 
 def page_activate_promo():
-    page_title("🏷️ Activate Promo Code")
-    if "active_promos" not in st.session_state:
-        st.session_state.active_promos = []
+    page_title("🏷️ Create Promo Code", "Create a new promo code — saved to database immediately")
+
+    vehicle_types = ["All", "bike", "auto", "toto", "ac_cab", "non_ac_cab", "ambulance"]
+
     with st.form("promo_form", clear_on_submit=True):
-        c1,c2,c3 = st.columns(3)
-        code      = c1.text_input("Code").strip().upper()
-        disc_type = c2.selectbox("Type", ["Percentage","Flat"])
-        disc_val  = c3.number_input("Value", min_value=1, value=10)
-        auto      = st.checkbox("Auto-Apply on booking")
-        if st.form_submit_button("🚀 Activate", type="primary"):
-            if code:
-                st.session_state.active_promos.append({
-                    "code":code,"discount":f"{disc_val}%" if disc_type=="Percentage" else f"₹{disc_val}",
-                    "auto_apply":auto,"created":datetime.now().strftime("%d %b %Y %H:%M")})
-                st.success(f"✅ {code} activated!")
-    for p in st.session_state.active_promos:
-        st.markdown(f"**{p['code']}** — {p['discount']} {'⚡ AUTO' if p['auto_apply'] else '✋ MANUAL'} · {p['created']}")
+        c1, c2 = st.columns(2)
+        with c1:
+            code = st.text_input("Promo Code").strip().upper()
+            disc_type = st.selectbox("Discount Type", ["percentage", "flat"])
+            disc_val = st.number_input("Discount Value", min_value=1.0,
+                                        value=10.0,
+                                        help="% if percentage, ₹ if flat")
+            min_fare = st.number_input("Minimum Fare (₹)", min_value=0.0, value=0.0)
+        with c2:
+            description = st.text_input("Description")
+            vehicle = st.selectbox("Applicable Vehicle Type", vehicle_types)
+            max_uses = st.number_input("Max Uses (0 = unlimited)", min_value=0, value=0)
+            expiry = st.date_input("Expiry Date (optional)", value=None)
+
+        auto_apply = st.checkbox("Auto-Apply on booking (no code entry needed)", value=True)
+
+        if st.form_submit_button("🚀 Create Promo", type="primary", use_container_width=True):
+            if not code:
+                st.error("Promo code is required.")
+            else:
+                payload = {
+                    "code": code,
+                    "description": description,
+                    "discount_type": disc_type,
+                    "discount_value": disc_val,
+                    "is_auto_apply": auto_apply,
+                    "max_uses": int(max_uses),
+                    "min_fare": min_fare,
+                    "vehicle_type": None if vehicle == "All" else vehicle,
+                }
+                if expiry:
+                    payload["expiry_date"] = expiry.strftime("%Y-%m-%d")
+
+                result = api_post("/promos/", payload)
+                if result and "message" in result:
+                    st.success(result["message"])
+                elif result and "detail" in result:
+                    st.error(f"❌ {result['detail']}")
+                else:
+                    st.error(f"❌ Failed: {result}")
+
+    st.markdown("---")
+    st.markdown("##### Existing Promos")
+    data = api_get("/promos/")
+    if data and data.get("promos"):
+        st.dataframe(pd.DataFrame(data["promos"])[["code","description","discount_display","is_auto_apply","is_active","used_count","max_uses","vehicle_type","expiry_date"]],
+                      use_container_width=True, hide_index=True)
 
 def page_driver_payments():
     page_title("💸 Driver Payments")
