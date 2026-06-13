@@ -233,11 +233,14 @@ def show_sidebar():
 
     pages = [
         "Overview", "Live Search Feed", "Search Heatmap", "Live Map",
-        "Trip Tracking", "Ride History", "Send Notification", "Activate Promo",
-        "Driver Online Log", "Rider Onboarding",
+        "Trip Tracking", "Ride History", "Send Notification", "Schedule Notification",
+        "Broadcast History", "Activate Promo", "Driver Online Log", "Rider Onboarding",
         "Driver Document Upload", "Driver Performance", "Driver Payments",
         "Vehicle Management", "Promotions", "Revenue Reports",
-        "Notifications", "Pricing & Fees", "Block Management"
+        "Notifications", "Pricing & Fees", "Block Management",
+        "Cancellation Config", "Wallet Management", "Withdrawal Requests",
+        "Trip Disputes", "SOS Alerts", "Cash Collection", "Referral Config",
+        "Delete User", "EV Stats"
     ]
 
     for p in pages:
@@ -814,7 +817,7 @@ def page_send_notification():
             else:
                 role_map = {"All Drivers":"driver","All Riders":"rider","All (Riders + Drivers)":None}
                 result = api_post("/admin/notifications/broadcast",
-                                  {"title": title, "message": message, "role": role_map.get(audience)})
+                                  {"title": title, "message": message, "target": role_map.get(audience)})
                 if result:
                     st.success(f"✅ Sent! {result.get('message','')}")
                     st.session_state.sent_notifs.insert(0,
@@ -1270,6 +1273,406 @@ def page_ride_history():
             for t in rtips]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CANCELLATION CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+def page_cancellation_config():
+    page_title("⚙️ Cancellation Config", "Set free waiting minutes and cancellation charges")
+    data = api_get("/admin/overview")
+    with st.form("cancel_config_form"):
+        st.markdown("##### Cancellation Settings")
+        c1, c2 = st.columns(2)
+        with c1:
+            free_minutes = st.number_input("Free Waiting Minutes", min_value=0, value=5, step=1,
+                help="Driver waits this many minutes for free before charges apply")
+        with c2:
+            charge_amount = st.number_input("Cancellation Charge (₹)", min_value=0.0, value=10.0, step=1.0,
+                help="Charge applied when rider cancels after driver arrives")
+        is_active = st.checkbox("Enable Cancellation Charges", value=True)
+        if st.form_submit_button("💾 Save", type="primary", use_container_width=True):
+            result = api_patch("/admin/config/cancellation", {
+                "free_minutes": int(free_minutes),
+                "charge_amount": float(charge_amount),
+                "is_active": is_active
+            })
+            if result and "message" in result:
+                st.success(result["message"])
+            else:
+                st.error(f"Failed: {result}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BROADCAST NOTIFICATION HISTORY
+# ══════════════════════════════════════════════════════════════════════════════
+def page_broadcast_history():
+    page_title("📬 Broadcast History", "All sent and scheduled notifications")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+    data = api_get("/admin/admin/notifications/broadcast")
+    if not data:
+        st.error("❌ Could not load notifications.")
+        return
+    notifs = data.get("notifications", [])
+    if not notifs:
+        st.info("No broadcasts sent yet.")
+        return
+    sent     = [n for n in notifs if n["is_sent"]]
+    pending  = [n for n in notifs if not n["is_sent"]]
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(metric("Total", str(len(notifs))), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Sent", str(len(sent)), "", "green"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("Scheduled", str(len(pending)), "", "amber"), unsafe_allow_html=True)
+    st.markdown("---")
+    for n in notifs:
+        status_color = "#34A853" if n["is_sent"] else "#FBBC04"
+        status_text  = "✅ Sent" if n["is_sent"] else "⏳ Scheduled"
+        st.markdown(f"""
+        <div style='background:white;border-radius:10px;padding:14px 18px;
+                    margin-bottom:8px;border-left:4px solid {status_color};
+                    box-shadow:0 1px 6px rgba(0,0,0,0.04);'>
+            <div style='font-weight:700;font-size:14px;'>{n["title"]}</div>
+            <div style='font-size:13px;color:#555;margin-top:4px;'>{n["message"]}</div>
+            <div style='font-size:12px;color:#888;margin-top:6px;'>
+                Target: {n["target"]} · {status_text} ·
+                Sent to: {n.get("total_sent", 0)} users ·
+                {str(n.get("sent_at") or n.get("scheduled_at") or "")[:16]}
+            </div>
+        </div>""", unsafe_allow_html=True)
+        if not n["is_sent"]:
+            if st.button(f"🚀 Send Now", key=f"send_now_{n['id']}"):
+                result = api_post(f"/admin/admin/notifications/send-now/{n['id']}")
+                if result:
+                    st.success(result.get("message", "Sent!"))
+                    st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SCHEDULE NOTIFICATION
+# ══════════════════════════════════════════════════════════════════════════════
+def page_schedule_notification():
+    page_title("📅 Schedule Notification", "Schedule a broadcast for a future date and time")
+    with st.form("schedule_notif_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            title    = st.text_input("Title", placeholder="e.g. Weekend Special Offer!")
+            target   = st.selectbox("Send To", ["all", "riders", "drivers"])
+            notif_type = st.selectbox("Type", ["promotional", "system", "alert"])
+        with c2:
+            message  = st.text_area("Message", height=100)
+            sched_date = st.date_input("Schedule Date")
+            sched_time = st.time_input("Schedule Time")
+        if st.form_submit_button("📅 Schedule", type="primary", use_container_width=True):
+            if not title or not message:
+                st.error("Fill in both title and message.")
+            else:
+                from datetime import datetime
+                scheduled_at = datetime.combine(sched_date, sched_time).isoformat()
+                result = api_post("/admin/admin/notifications/broadcast", {
+                    "title": title,
+                    "message": message,
+                    "target": target,
+                    "notif_type": notif_type,
+                    "scheduled_at": scheduled_at
+                })
+                if result and "message" in result:
+                    st.success(f"✅ Scheduled for {scheduled_at}")
+                else:
+                    st.error(f"Failed: {result}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WALLET MANAGEMENT
+# ══════════════════════════════════════════════════════════════════════════════
+def page_wallet_management():
+    page_title("💳 Wallet Management", "View and manage rider and driver wallets")
+    tab1, tab2 = st.tabs(["👤 Rider Wallets", "🚗 Driver Wallets"])
+
+    with tab1:
+        data = api_get("/admin/users", params={"limit": 200})
+        if not data:
+            st.error("❌ Could not load users.")
+            return
+        users = data.get("users", [])
+        search = st.text_input("🔍 Search by name or phone", key="wallet_rider_search")
+        if search:
+            users = [u for u in users if search.lower() in u["full_name"].lower()
+                     or search in str(u.get("phone", ""))]
+        total_wallet = sum(u.get("wallet_balance", 0) for u in users)
+        st.markdown(metric("Total Wallet Balance", f"₹{total_wallet:,.2f}", "", "green"), unsafe_allow_html=True)
+        st.markdown("---")
+        rows = [{"Name": u["full_name"], "Phone": u.get("phone", ""),
+                 "Wallet (₹)": u.get("wallet_balance", 0),
+                 "Joined": str(u.get("created_at", ""))[:10]} for u in users]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    with tab2:
+        data = api_get("/admin/drivers")
+        if not data:
+            st.error("❌ Could not load drivers.")
+            return
+        drivers = data.get("drivers", [])
+        search2 = st.text_input("🔍 Search by name or phone", key="wallet_driver_search")
+        if search2:
+            drivers = [d for d in drivers if search2.lower() in d["full_name"].lower()
+                       or search2 in str(d.get("phone", ""))]
+        total_driver_wallet = sum(d.get("wallet_balance", 0) for d in drivers)
+        st.markdown(metric("Total Driver Wallet Balance", f"₹{total_driver_wallet:,.2f}", "", "green"), unsafe_allow_html=True)
+        st.markdown("---")
+        rows2 = [{"Name": d["full_name"], "Phone": d.get("phone", ""),
+                  "Wallet (₹)": d.get("wallet_balance", 0),
+                  "Total Earnings (₹)": d.get("total_earnings", 0),
+                  "Total Trips": d.get("total_trips", 0)} for d in drivers]
+        st.dataframe(pd.DataFrame(rows2), use_container_width=True, hide_index=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  WITHDRAWAL REQUESTS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_withdrawals():
+    page_title("💸 Withdrawal Requests", "Approve or reject driver withdrawal requests")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+    data = api_get("/admin/withdrawals")
+    if not data:
+        st.error("❌ Could not load withdrawals.")
+        return
+    withdrawals = data.get("withdrawals", [])
+    if not withdrawals:
+        st.info("No withdrawal requests yet.")
+        return
+    pending  = [w for w in withdrawals if w["status"] == "pending"]
+    approved = [w for w in withdrawals if w["status"] == "approved"]
+    rejected = [w for w in withdrawals if w["status"] == "rejected"]
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(metric("Pending", str(len(pending)), "", "amber"), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Approved", str(len(approved)), "", "green"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("Rejected", str(len(rejected)), "", "red"), unsafe_allow_html=True)
+    st.markdown("---")
+    for w in withdrawals:
+        status_color = {"pending": "#FBBC04", "approved": "#34A853", "rejected": "#EA4335"}.get(w["status"], "#ccc")
+        st.markdown(f"""
+        <div style='background:white;border-radius:10px;padding:14px 18px;
+                    margin-bottom:8px;border-left:4px solid {status_color};'>
+            <b>{w.get("driver_name", "Driver")}</b> — ₹{w.get("amount", 0):,.2f}
+            <span style='color:#888;font-size:12px;margin-left:8px;'>
+                {w.get("method", "")} · {w.get("upi_id") or w.get("account_number", "")}
+            </span>
+            <span style='float:right;font-size:12px;color:{status_color};font-weight:600;'>
+                {w["status"].upper()}
+            </span>
+        </div>""", unsafe_allow_html=True)
+        if w["status"] == "pending":
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("✅ Approve", key=f"appr_w_{w['id']}", type="primary", use_container_width=True):
+                    result = api_patch(f"/admin/withdrawals/{w['id']}/approve")
+                    if result:
+                        st.success("Approved!")
+                        st.rerun()
+            with col2:
+                if st.button("❌ Reject", key=f"rej_w_{w['id']}", use_container_width=True):
+                    result = api_patch(f"/admin/withdrawals/{w['id']}/reject")
+                    if result:
+                        st.warning("Rejected.")
+                        st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TRIP DISPUTES
+# ══════════════════════════════════════════════════════════════════════════════
+def page_disputes():
+    page_title("⚖️ Trip Disputes", "View and resolve trip disputes")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+    data = api_get("/admin/disputes")
+    if not data:
+        st.error("❌ Could not load disputes.")
+        return
+    disputes = data.get("disputes", [])
+    if not disputes:
+        st.info("No disputes yet.")
+        return
+    open_d    = [d for d in disputes if d["status"] == "open"]
+    resolved  = [d for d in disputes if d["status"] == "resolved"]
+    c1, c2 = st.columns(2)
+    with c1: st.markdown(metric("Open", str(len(open_d)), "", "red"), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Resolved", str(len(resolved)), "", "green"), unsafe_allow_html=True)
+    st.markdown("---")
+    for d in disputes:
+        status_color = "#EA4335" if d["status"] == "open" else "#34A853"
+        st.markdown(f"""
+        <div style='background:white;border-radius:10px;padding:14px 18px;
+                    margin-bottom:8px;border-left:4px solid {status_color};'>
+            <b>Trip #{d.get("trip_code", d.get("trip_id", ""))}</b>
+            <span style='color:#888;font-size:12px;margin-left:8px;'>
+                {d.get("raised_by_name", "")} · {str(d.get("created_at", ""))[:10]}
+            </span>
+            <div style='font-size:13px;color:#555;margin-top:4px;'>{d.get("reason", "")}</div>
+        </div>""", unsafe_allow_html=True)
+        if d["status"] == "open":
+            resolution = st.text_input("Resolution note", key=f"res_{d['id']}")
+            if st.button("✅ Resolve", key=f"resolve_{d['id']}", type="primary"):
+                result = api_patch(f"/admin/disputes/{d['id']}/resolve",
+                                   {"resolution": resolution})
+                if result:
+                    st.success("Dispute resolved!")
+                    st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SOS ALERTS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_sos():
+    page_title("🆘 SOS Alerts", "Emergency alerts from riders and drivers")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+    data = api_get("/admin/sos")
+    if not data:
+        st.error("❌ Could not load SOS alerts.")
+        return
+    alerts = data.get("sos_alerts", [])
+    if not alerts:
+        st.info("✅ No active SOS alerts.")
+        return
+    active   = [a for a in alerts if a["status"] == "active"]
+    resolved = [a for a in alerts if a["status"] == "resolved"]
+    c1, c2 = st.columns(2)
+    with c1: st.markdown(metric("🔴 Active", str(len(active)), "", "red"), unsafe_allow_html=True)
+    with c2: st.markdown(metric("✅ Resolved", str(len(resolved)), "", "green"), unsafe_allow_html=True)
+    st.markdown("---")
+    for a in alerts:
+        status_color = "#EA4335" if a["status"] == "active" else "#34A853"
+        st.markdown(f"""
+        <div style='background:white;border-radius:10px;padding:14px 18px;
+                    margin-bottom:8px;border-left:4px solid {status_color};'>
+            <b>🆘 {a.get("raised_by_name", "Unknown")}</b>
+            <span style='color:#888;font-size:12px;margin-left:8px;'>
+                Trip #{a.get("trip_id", "—")} · {str(a.get("created_at", ""))[:16]}
+            </span>
+            <div style='font-size:12px;color:#555;margin-top:4px;'>
+                📍 Lat: {a.get("lat", "—")} · Lng: {a.get("lng", "—")}
+            </div>
+            <span style='font-size:12px;color:{status_color};font-weight:600;'>
+                {a["status"].upper()}
+            </span>
+        </div>""", unsafe_allow_html=True)
+        if a["status"] == "active":
+            if st.button("✅ Mark Resolved", key=f"sos_{a['id']}", type="primary"):
+                result = api_patch(f"/admin/sos/{a['id']}/resolve")
+                if result:
+                    st.success("SOS resolved!")
+                    st.rerun()
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CASH COLLECTION REPORT
+# ══════════════════════════════════════════════════════════════════════════════
+def page_cash_collection():
+    page_title("💵 Cash Collection Report", "All cash collected by drivers")
+    trip_data = api_get("/admin/trips", params={"limit": 500})
+    if not trip_data:
+        st.error("❌ Could not load trips.")
+        return
+    trips = trip_data.get("trips", [])
+    cash_trips = [t for t in trips if t.get("payment_method") == "cash"]
+    collected  = [t for t in cash_trips if t.get("cash_collected")]
+    pending    = [t for t in cash_trips if not t.get("cash_collected") and t.get("status") == "completed"]
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.markdown(metric("Total Cash Trips", str(len(cash_trips))), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Collected", str(len(collected)), "", "green"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("Pending Collection", str(len(pending)), "", "amber"), unsafe_allow_html=True)
+    total_cash = sum(t.get("actual_fare") or t.get("estimated_fare") or 0 for t in collected)
+    with c4: st.markdown(metric("Total Collected", f"₹{total_cash:,.0f}", "", "green"), unsafe_allow_html=True)
+    st.markdown("---")
+    rows = [{"Trip Code": t.get("trip_code", ""),
+             "Driver": (t.get("driver") or {}).get("name", "—"),
+             "Rider": (t.get("rider") or {}).get("name", "—"),
+             "Amount (₹)": t.get("actual_fare") or t.get("estimated_fare") or 0,
+             "Collected": "✅" if t.get("cash_collected") else "⏳",
+             "Date": str(t.get("completed_at") or t.get("requested_at") or "")[:10]}
+            for t in cash_trips]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.download_button("📥 Download CSV", pd.DataFrame(rows).to_csv(index=False),
+                       "cash_collection.csv", "text/csv")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REFERRAL CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+def page_referral_config():
+    page_title("🎁 Referral Config", "Set referral bonus amounts for riders and drivers")
+    with st.form("referral_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            referrer_bonus = st.number_input("Referrer Bonus (₹)", min_value=0.0, value=50.0, step=5.0,
+                help="Amount given to person who referred")
+            referee_bonus  = st.number_input("Referee Bonus (₹)", min_value=0.0, value=30.0, step=5.0,
+                help="Amount given to new user who was referred")
+        with c2:
+            min_trips      = st.number_input("Min Trips to Unlock Bonus", min_value=1, value=1, step=1)
+            is_active      = st.checkbox("Enable Referral Program", value=True)
+        if st.form_submit_button("💾 Save", type="primary", use_container_width=True):
+            result = api_patch("/admin/config/referral", {
+                "referrer_bonus": referrer_bonus,
+                "referee_bonus": referee_bonus,
+                "min_trips": int(min_trips),
+                "is_active": is_active
+            })
+            if result and "message" in result:
+                st.success(result["message"])
+            else:
+                st.error(f"Failed: {result}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DELETE USER
+# ══════════════════════════════════════════════════════════════════════════════
+def page_delete_user():
+    page_title("🗑️ Delete User", "Permanently delete rider or driver accounts")
+    st.warning("⚠️ This action is permanent and cannot be undone!")
+    data = api_get("/admin/users", params={"limit": 500})
+    if not data:
+        st.error("❌ Could not load users.")
+        return
+    users = data.get("users", [])
+    search = st.text_input("🔍 Search by name or phone")
+    if search:
+        users = [u for u in users if search.lower() in u["full_name"].lower()
+                 or search in str(u.get("phone", ""))]
+    for u in users:
+        col1, col2 = st.columns([4, 1])
+        with col1:
+            st.markdown(f"**{u['full_name']}** — {u.get('phone', '')} — {u.get('role', '')}")
+        with col2:
+            if st.button("🗑️ Delete", key=f"del_{u['id']}", type="primary", use_container_width=True):
+                result = api_delete(f"/admin/users/{u['id']}")
+                if result and "message" in result:
+                    st.success(f"✅ {u['full_name']} deleted!")
+                    st.rerun()
+                else:
+                    st.error(f"Failed: {result}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EV VEHICLE STATS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_ev_stats():
+    page_title("⚡ EV Vehicle Stats", "Electric vehicle drivers vs non-EV")
+    data = api_get("/admin/drivers")
+    if not data:
+        st.error("❌ Could not load drivers.")
+        return
+    drivers = data.get("drivers", [])
+    ev      = [d for d in drivers if d.get("fuel_type") == "ev"]
+    non_ev  = [d for d in drivers if d.get("fuel_type") != "ev"]
+    c1, c2, c3 = st.columns(3)
+    with c1: st.markdown(metric("Total Drivers", str(len(drivers))), unsafe_allow_html=True)
+    with c2: st.markdown(metric("⚡ EV Drivers", str(len(ev)), "", "green"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("⛽ Non-EV Drivers", str(len(non_ev)), "", "amber"), unsafe_allow_html=True)
+    st.markdown("---")
+    if ev:
+        fig = px.pie(values=[len(ev), len(non_ev)], names=["EV", "Non-EV"],
+                     title="EV vs Non-EV Drivers",
+                     color_discrete_sequence=["#34A853", "#EA4335"])
+        st.plotly_chart(fig, use_container_width=True)
+    rows = [{"Name": d["full_name"], "Phone": d.get("phone", ""),
+             "Vehicle Type": d.get("vehicle_type", ""),
+             "Fuel Type": d.get("fuel_type", ""),
+             "Online": "🟢" if d["is_online"] else "⚫",
+             "Trips": d.get("total_trips", 0)} for d in drivers]
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1305,6 +1708,8 @@ else:
         "Trip Tracking"          : page_trips,
         "Ride History"           : page_ride_history,
         "Send Notification"      : page_send_notification,
+        "Schedule Notification"  : page_schedule_notification,
+        "Broadcast History"      : page_broadcast_history,
         "Activate Promo"         : page_activate_promo,
         "Driver Online Log"      : page_driver_online_log,
         "Rider Onboarding"       : page_rider_onboarding,
@@ -1317,5 +1722,14 @@ else:
         "Notifications"          : page_notifications,
         "Pricing & Fees"         : page_pricing_config,
         "Block Management"       : page_block_management,
+        "Cancellation Config"    : page_cancellation_config,
+        "Wallet Management"      : page_wallet_management,
+        "Withdrawal Requests"    : page_withdrawals,
+        "Trip Disputes"          : page_disputes,
+        "SOS Alerts"             : page_sos,
+        "Cash Collection"        : page_cash_collection,
+        "Referral Config"        : page_referral_config,
+        "Delete User"            : page_delete_user,
+        "EV Stats"               : page_ev_stats,
     }
     routing.get(page, page_overview)()
