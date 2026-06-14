@@ -1958,6 +1958,9 @@ else:
         "Cash Collection"        : page_cash_collection,
         "Referral Config"        : page_referral_config,
         "Delete User"            : page_delete_user,
-        "EV Stats", "Reviews", "Commission Report", "Cancellation Reasons"               : page_ev_stats,
+        "EV Stats"               : page_ev_stats,
+        "Reviews"                : page_reviews,
+        "Commission Report"      : page_commission,
+        "Cancellation Reasons"   : page_cancellation_reasons,
     }
     routing.get(page, page_overview)()
