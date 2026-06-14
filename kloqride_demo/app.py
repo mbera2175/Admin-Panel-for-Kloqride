@@ -240,7 +240,7 @@ def show_sidebar():
         "Notifications", "Pricing & Fees", "Block Management",
         "Cancellation Config", "Wallet Management", "Withdrawal Requests",
         "Trip Disputes", "SOS Alerts", "Cash Collection", "Referral Config",
-        "Delete User", "EV Stats"
+        "Delete User", "EV Stats", "Reviews", "Commission Report", "Cancellation Reasons"
     ]
 
     for p in pages:
@@ -816,7 +816,7 @@ def page_send_notification():
                 st.error("Fill in both title and message.")
             else:
                 role_map = {"All Drivers":"driver","All Riders":"rider","All (Riders + Drivers)":None}
-                result = api_post("/admin/notifications/broadcast",
+                result = api_post("/admin/notifications/broadcast-scheduled",
                                   {"title": title, "message": message, "target": role_map.get(audience)})
                 if result:
                     st.success(f"✅ Sent! {result.get('message','')}")
@@ -1308,7 +1308,7 @@ def page_broadcast_history():
     page_title("📬 Broadcast History", "All sent and scheduled notifications")
     if st.button("🔄 Refresh"):
         st.rerun()
-    data = api_get("/admin/admin/notifications/broadcast")
+    data = api_get("/admin/notifications/broadcast-history")
     if not data:
         st.error("❌ Could not load notifications.")
         return
@@ -1340,7 +1340,7 @@ def page_broadcast_history():
         </div>""", unsafe_allow_html=True)
         if not n["is_sent"]:
             if st.button(f"🚀 Send Now", key=f"send_now_{n['id']}"):
-                result = api_post(f"/admin/admin/notifications/send-now/{n['id']}")
+                result = api_post(f"/admin/notifications/send-now/{n['id']}")
                 if result:
                     st.success(result.get("message", "Sent!"))
                     st.rerun()
@@ -1366,7 +1366,7 @@ def page_schedule_notification():
             else:
                 from datetime import datetime
                 scheduled_at = datetime.combine(sched_date, sched_time).isoformat()
-                result = api_post("/admin/admin/notifications/broadcast", {
+                result = api_post("/admin/notifications/broadcast-scheduled", {
                     "title": title,
                     "message": message,
                     "target": target,
@@ -1673,6 +1673,234 @@ def page_ev_stats():
              "Trips": d.get("total_trips", 0)} for d in drivers]
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  REVIEWS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_reviews():
+    page_title("⭐ Reviews", "Rider and driver ratings and comments")
+    tab1, tab2 = st.tabs(["🚗 Driver Reviews", "👤 Rider Reviews"])
+
+    with tab1:
+        data = api_get("/admin/ratings", params={"role": "driver", "limit": 200})
+        if not data:
+            st.error("❌ Could not load driver reviews.")
+            return
+        ratings = data.get("ratings", [])
+        if not ratings:
+            st.info("No driver reviews yet.")
+        else:
+            total   = len(ratings)
+            avg     = round(sum(r["score"] for r in ratings) / total, 2) if total > 0 else 0
+            five    = sum(1 for r in ratings if r["score"] == 5)
+            one     = sum(1 for r in ratings if r["score"] == 1)
+            c1, c2, c3, c4 = st.columns(4)
+            with c1: st.markdown(metric("Total Reviews", str(total)), unsafe_allow_html=True)
+            with c2: st.markdown(metric("Average Rating", f"⭐ {avg}", "", "green"), unsafe_allow_html=True)
+            with c3: st.markdown(metric("5 Star", str(five), "", "green"), unsafe_allow_html=True)
+            with c4: st.markdown(metric("1 Star", str(one), "", "red"), unsafe_allow_html=True)
+            st.markdown("---")
+            search = st.text_input("🔍 Search by driver name", key="drv_review_search")
+            if search:
+                ratings = [r for r in ratings if search.lower() in r["rated_name"].lower()]
+            for r in ratings:
+                stars = "⭐" * r["score"] + "☆" * (5 - r["score"])
+                color = "#34A853" if r["score"] >= 4 else ("#FBBC04" if r["score"] == 3 else "#EA4335")
+                st.markdown(f"""
+                <div style='background:white;border-radius:10px;padding:14px 18px;
+                            margin-bottom:8px;border-left:4px solid {color};
+                            box-shadow:0 1px 6px rgba(0,0,0,0.04);'>
+                    <div style='display:flex;justify-content:space-between;'>
+                        <div>
+                            <b>{r["rated_name"]}</b>
+                            <span style='color:#888;font-size:12px;margin-left:8px;'>
+                                rated by {r["rater_name"]}
+                            </span>
+                        </div>
+                        <div style='font-size:18px;'>{stars}</div>
+                    </div>
+                    <div style='font-size:13px;color:#555;margin-top:6px;'>
+                        {r.get("comment") or "<i>No comment</i>"}
+                    </div>
+                    <div style='font-size:11px;color:#aaa;margin-top:4px;'>
+                        Trip #{r["trip_code"]} · {r["created_at"]}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+    with tab2:
+        data = api_get("/admin/ratings", params={"role": "rider", "limit": 200})
+        if not data:
+            st.error("❌ Could not load rider reviews.")
+            return
+        ratings = data.get("ratings", [])
+        if not ratings:
+            st.info("No rider reviews yet.")
+        else:
+            total   = len(ratings)
+            avg     = round(sum(r["score"] for r in ratings) / total, 2) if total > 0 else 0
+            c1, c2 = st.columns(2)
+            with c1: st.markdown(metric("Total Reviews", str(total)), unsafe_allow_html=True)
+            with c2: st.markdown(metric("Average Rating", f"⭐ {avg}", "", "green"), unsafe_allow_html=True)
+            st.markdown("---")
+            search2 = st.text_input("🔍 Search by rider name", key="rider_review_search")
+            if search2:
+                ratings = [r for r in ratings if search2.lower() in r["rated_name"].lower()]
+            for r in ratings:
+                stars = "⭐" * r["score"] + "☆" * (5 - r["score"])
+                color = "#34A853" if r["score"] >= 4 else ("#FBBC04" if r["score"] == 3 else "#EA4335")
+                st.markdown(f"""
+                <div style='background:white;border-radius:10px;padding:14px 18px;
+                            margin-bottom:8px;border-left:4px solid {color};
+                            box-shadow:0 1px 6px rgba(0,0,0,0.04);'>
+                    <div style='display:flex;justify-content:space-between;'>
+                        <div>
+                            <b>{r["rated_name"]}</b>
+                            <span style='color:#888;font-size:12px;margin-left:8px;'>
+                                rated by {r["rater_name"]}
+                            </span>
+                        </div>
+                        <div style='font-size:18px;'>{stars}</div>
+                    </div>
+                    <div style='font-size:13px;color:#555;margin-top:6px;'>
+                        {r.get("comment") or "<i>No comment</i>"}
+                    </div>
+                    <div style='font-size:11px;color:#aaa;margin-top:4px;'>
+                        Trip #{r["trip_code"]} · {r["created_at"]}
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  COMMISSION & PAYMENT BREAKDOWN
+# ══════════════════════════════════════════════════════════════════════════════
+def page_commission():
+    page_title("💰 Commission & Payment Breakdown", "Driver earnings, company commission, promo payouts")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+
+    trip_data = api_get("/admin/trips", params={"limit": 500})
+    if not trip_data:
+        st.error("❌ Could not load trips.")
+        return
+    trips = [t for t in trip_data.get("trips", []) if t.get("status") == "completed"]
+
+    total_fare       = sum(t.get("actual_fare") or 0 for t in trips)
+    total_commission = sum(t.get("platform_fee") or 0 for t in trips)
+    total_earnings   = sum(t.get("driver_earnings") or 0 for t in trips)
+    total_promo      = sum(t.get("promo_discount") or 0 for t in trips)
+    cash_trips       = [t for t in trips if t.get("payment_method") == "cash"]
+    online_trips     = [t for t in trips if t.get("payment_method") != "cash"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.markdown(metric("Total Revenue", f"₹{total_fare:,.0f}", "", "green"), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Company Commission", f"₹{total_commission:,.0f}", "", "purple"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("Driver Earnings", f"₹{total_earnings:,.0f}", "", "blue"), unsafe_allow_html=True)
+    with c4: st.markdown(metric("Promo Discounts", f"₹{total_promo:,.0f}", "", "amber"), unsafe_allow_html=True)
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1: st.markdown(metric("Cash Trips", str(len(cash_trips))), unsafe_allow_html=True)
+    with c2: st.markdown(metric("Online Trips", str(len(online_trips))), unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("📋 Trip Payment Details")
+
+    rows = []
+    for t in trips:
+        actual_fare    = t.get("actual_fare") or 0
+        promo_discount = t.get("promo_discount") or 0
+        commission     = t.get("platform_fee") or 0
+        driver_earn    = t.get("driver_earnings") or 0
+        payment_method = t.get("payment_method", "")
+        net_rider_fare = max(0, actual_fare - promo_discount)
+
+        if payment_method == "cash":
+            cash_collected   = net_rider_fare
+            company_pays     = max(0, driver_earn - cash_collected)
+        else:
+            cash_collected   = 0
+            company_pays     = 0
+
+        rows.append({
+            "Trip Code"        : t.get("trip_code", ""),
+            "Driver"           : (t.get("driver") or {}).get("name", "—"),
+            "Rider"            : (t.get("rider") or {}).get("name", "—"),
+            "Actual Fare (₹)"  : actual_fare,
+            "Promo Discount (₹)": promo_discount,
+            "Promo Code"       : t.get("promo_code") or "—",
+            "Net Rider Pays (₹)": net_rider_fare,
+            "Commission (₹)"   : commission,
+            "Driver Earns (₹)" : driver_earn,
+            "Payment"          : payment_method,
+            "Cash Collected (₹)": cash_collected,
+            "Company Pays Driver (₹)": company_pays,
+            "Date"             : str(t.get("completed_at") or "")[:10],
+        })
+
+    df = pd.DataFrame(rows)
+    st.dataframe(df, use_container_width=True, height=400, hide_index=True)
+    st.download_button("📥 Download CSV", df.to_csv(index=False),
+                       "commission_report.csv", "text/csv", type="primary")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CANCELLATION REASONS
+# ══════════════════════════════════════════════════════════════════════════════
+def page_cancellation_reasons():
+    page_title("❌ Cancellation Reasons", "Why trips were cancelled")
+    if st.button("🔄 Refresh"):
+        st.rerun()
+
+    trip_data = api_get("/admin/trips", params={"limit": 500, "status": "cancelled"})
+    if not trip_data:
+        st.error("❌ Could not load trips.")
+        return
+    trips = trip_data.get("trips", [])
+    if not trips:
+        st.info("No cancelled trips yet.")
+        return
+
+    by_rider  = [t for t in trips if t.get("cancelled_by") == "rider"]
+    by_driver = [t for t in trips if t.get("cancelled_by") == "driver"]
+    by_system = [t for t in trips if t.get("cancelled_by") == "system"]
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1: st.markdown(metric("Total Cancelled", str(len(trips))), unsafe_allow_html=True)
+    with c2: st.markdown(metric("By Rider", str(len(by_rider)), "", "amber"), unsafe_allow_html=True)
+    with c3: st.markdown(metric("By Driver", str(len(by_driver)), "", "red"), unsafe_allow_html=True)
+    with c4: st.markdown(metric("By System", str(len(by_system)), "", "purple"), unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # Pie chart
+    import plotly.express as px
+    fig = px.pie(
+        values=[len(by_rider), len(by_driver), len(by_system)],
+        names=["Rider", "Driver", "System"],
+        title="Cancellation by Who",
+        color_discrete_sequence=["#FBBC04", "#EA4335", "#7F77DD"]
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("📋 Cancellation Details")
+
+    rows = [{"Trip Code"     : t.get("trip_code", ""),
+             "Cancelled By"  : t.get("cancelled_by", "—"),
+             "Reason"        : t.get("cancel_reason", "—"),
+             "Rider"         : (t.get("rider") or {}).get("name", "—"),
+             "Driver"        : (t.get("driver") or {}).get("name", "—"),
+             "Vehicle"       : str(t.get("vehicle_type", "")),
+             "Date"          : str(t.get("cancelled_at") or t.get("requested_at") or "")[:16]}
+            for t in trips]
+
+    df = pd.DataFrame(rows)
+    cancelled_by_filter = st.selectbox("Filter by", ["All", "rider", "driver", "system"])
+    if cancelled_by_filter != "All":
+        df = df[df["Cancelled By"] == cancelled_by_filter]
+    st.dataframe(df, use_container_width=True, height=400, hide_index=True)
+    st.download_button("📥 Download CSV", df.to_csv(index=False),
+                       "cancellation_reasons.csv", "text/csv")
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  ROUTER
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1730,6 +1958,6 @@ else:
         "Cash Collection"        : page_cash_collection,
         "Referral Config"        : page_referral_config,
         "Delete User"            : page_delete_user,
-        "EV Stats"               : page_ev_stats,
+        "EV Stats", "Reviews", "Commission Report", "Cancellation Reasons"               : page_ev_stats,
     }
     routing.get(page, page_overview)()
