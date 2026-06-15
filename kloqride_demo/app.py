@@ -185,49 +185,64 @@ def page_overview():
 
 def page_live_feed():
     page_title("🔴 Live Feed","Real-time ride requests")
-    if st.button("🔄 Refresh"): st.rerun()
-    data=api_get("/admin/trips",params={"limit":100})
+    if st.button("🔄 Refresh",use_container_width=False): st.rerun()
+    data=api_get("/admin/trips",params={"limit":200})
     if not data: st.error("❌ Cannot load trips."); return
     trips=data.get("trips",[])
     total=len(trips)
     completed=sum(1 for t in trips if t["status"]=="completed")
     searching=sum(1 for t in trips if t["status"]=="requested")
+    active=sum(1 for t in trips if t["status"] in ["accepted","arrived","started"])
     cancelled=sum(1 for t in trips if t["status"]=="cancelled")
-    c1,c2,c3,c4=st.columns(4)
+    c1,c2,c3,c4,c5=st.columns(5)
     with c1: st.markdown(metric("Total",str(total)),unsafe_allow_html=True)
     with c2: st.markdown(metric("Searching",str(searching),"","amber"),unsafe_allow_html=True)
-    with c3: st.markdown(metric("Completed",str(completed),"","green"),unsafe_allow_html=True)
-    with c4: st.markdown(metric("Cancelled",str(cancelled),"","red"),unsafe_allow_html=True)
+    with c3: st.markdown(metric("Active",str(active),"","green"),unsafe_allow_html=True)
+    with c4: st.markdown(metric("Completed",str(completed),"","green"),unsafe_allow_html=True)
+    with c5: st.markdown(metric("Cancelled",str(cancelled),"","red"),unsafe_allow_html=True)
     st.markdown("---")
-    s_f=st.selectbox("Filter Status",["All","requested","accepted","arrived","started","completed","cancelled"])
+    c1,c2=st.columns(2)
+    with c1: s_f=st.selectbox("Filter Status",["All","requested","accepted","arrived","started","completed","cancelled"])
+    with c2: search=st.text_input("Search by trip code or rider name")
     filtered=[t for t in trips if s_f=="All" or t["status"]==s_f]
-    s_color={"requested":"#FBBC04","accepted":"#34A853","arrived":"#34A853","started":"#34A853","completed":"#34A853","cancelled":"#EA4335"}
-    for t in filtered[:30]:
-        s=t["status"]; rider=t.get("rider") or {}; driver=t.get("driver") or {}
+    if search:
+        filtered=[t for t in filtered if
+            search.lower() in str(t.get("trip_code","")).lower() or
+            search.lower() in str((t.get("rider") or {}).get("name","")).lower()]
+    status_icon={"requested":"🟡 Searching","accepted":"🟢 Accepted","arrived":"🔵 Arrived","started":"🚗 On Trip","completed":"✅ Completed","cancelled":"❌ Cancelled"}
+    rows=[]
+    for t in filtered:
+        rider=t.get("rider") or {}
+        driver=t.get("driver") or {}
         fare=t.get("actual_fare") or t.get("estimated_fare") or 0
-        cancel_info=""
-        if s=="cancelled":
-            cancel_info=f"<div style='font-size:11px;color:#EA4335;margin-top:4px'>❌ Cancelled by {t.get('cancelled_by','—')} — {t.get('cancel_reason','—')}</div>"
-        st.markdown(f"""<div style='background:white;border-radius:10px;padding:14px 18px;
-            margin-bottom:8px;border-left:4px solid {s_color.get(s,"#ccc")};
-            box-shadow:0 1px 6px rgba(0,0,0,.04)'>
-            <div style='display:flex;justify-content:space-between'>
-                <div>
-                    <b>{rider.get("name","Unknown")}</b>
-                    <span style='color:#aaa;font-size:12px;margin-left:8px'>({rider.get("phone","—")})</span>
-                    <div style='font-size:12px;color:#555;margin-top:2px'>
-                        📍 {t.get("pickup_address","—")} → {t.get("drop_address","—")}
-                    </div>
-                    <div style='font-size:12px;color:#888'>Driver: {driver.get("name","—")} · #{t.get("trip_code","—")}</div>
-                    {cancel_info}
-                </div>
-                <div style='text-align:right'>
-                    <span style='background:{s_color.get(s,"#f5f5f5")};color:white;
-                        padding:3px 10px;border-radius:20px;font-size:11px'>{s.upper()}</span>
-                    <div style='font-size:13px;font-weight:700;color:#FF6B00;margin-top:4px'>₹{fare:.0f}</div>
-                    <div style='font-size:11px;color:#aaa'>{str(t.get("payment_method",""))}</div>
-                </div>
-            </div></div>""", unsafe_allow_html=True)
+        s=t.get("status","")
+        # Get dispatch logs for this trip
+        logs=api_get(f"/admin/trips/{t['id']}/dispatch-logs")
+        log_list=logs.get("logs",[]) if logs else []
+        notified_count=len(log_list)
+        notified_drivers=", ".join([f"{l['driver_name']} ({l['driver_phone']})" for l in log_list]) if log_list else "—"
+        accepted_driver=next((l for l in log_list if l["status"]=="accepted"),None)
+        rows.append({
+            "Trip Code"          : t.get("trip_code",""),
+            "Date"               : str(t.get("requested_at",""))[:16],
+            "Rider Name"         : rider.get("name","—"),
+            "Rider Phone"        : rider.get("phone","—"),
+            "Drivers Notified"   : notified_count,
+            "Notified Drivers"   : notified_drivers,
+            "Accepted By"        : driver.get("name","—") if driver else "—",
+            "Driver Phone"       : driver.get("phone","—") if driver else "—",
+            "Status"             : status_icon.get(s,s.upper()),
+            "Pickup"             : str(t.get("pickup_address",""))[:40],
+            "Drop"               : str(t.get("drop_address",""))[:40],
+            "Fare (Rs.)"         : round(fare,0),
+            "Payment"            : str(t.get("payment_method","")),
+        })
+    if rows:
+        df=pd.DataFrame(rows)
+        st.dataframe(df,use_container_width=True,height=550,hide_index=True)
+        st.download_button("📥 Download CSV",df.to_csv(index=False),"live_feed.csv","text/csv")
+    else:
+        st.info("No trips found.")
 
 def page_heatmap():
     page_title("🔥 Search Heatmap","Pickup demand locations")
